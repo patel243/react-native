@@ -21,11 +21,11 @@ import androidx.annotation.UiThread;
 import com.facebook.common.logging.FLog;
 import com.facebook.infer.annotation.Assertions;
 import com.facebook.infer.annotation.ThreadConfined;
-import com.facebook.react.bridge.ReactNoCrashSoftException;
 import com.facebook.react.bridge.ReactSoftException;
 import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.ReadableNativeMap;
+import com.facebook.react.bridge.RetryableMountingLayerException;
 import com.facebook.react.bridge.SoftAssertions;
 import com.facebook.react.bridge.UiThreadUtil;
 import com.facebook.react.fabric.FabricUIManager;
@@ -138,7 +138,7 @@ public class MountingManager {
   private @NonNull ViewState getViewState(int tag) {
     ViewState viewState = mTagToViewState.get(tag);
     if (viewState == null) {
-      throw new IllegalStateException("Unable to find viewState view for tag " + tag);
+      throw new RetryableMountingLayerException("Unable to find viewState view for tag " + tag);
     }
     return viewState;
   }
@@ -155,21 +155,18 @@ public class MountingManager {
     // view hierarchy. For example, TextInput may send a "blur" command in response to the view
     // disappearing. Throw `ReactNoCrashSoftException` so they're logged but don't crash in dev
     // for now.
-    // TODO T58653970: Crash in debug again and fix all the places that cause this to crash.
     if (viewState == null) {
-      ReactSoftException.logSoftException(
-          MountingManager.TAG,
-          new ReactNoCrashSoftException(
-              "Unable to find viewState for tag: " + reactTag + " for commandId: " + commandId));
-      return;
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState for tag: " + reactTag + " for commandId: " + commandId);
     }
 
     if (viewState.mViewManager == null) {
-      throw new IllegalStateException("Unable to find viewManager for tag " + reactTag);
+      throw new RetryableMountingLayerException("Unable to find viewManager for tag " + reactTag);
     }
 
     if (viewState.mView == null) {
-      throw new IllegalStateException("Unable to find viewState view for tag " + reactTag);
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState view for tag " + reactTag);
     }
 
     viewState.mViewManager.receiveCommand(viewState.mView, commandId, commandArgs);
@@ -179,20 +176,23 @@ public class MountingManager {
       int reactTag, @NonNull String commandId, @Nullable ReadableArray commandArgs) {
     ViewState viewState = getNullableViewState(reactTag);
 
+    // It's not uncommon for JS to send events as/after a component is being removed from the
+    // view hierarchy. For example, TextInput may send a "blur" command in response to the view
+    // disappearing. Throw `ReactNoCrashSoftException` so they're logged but don't crash in dev
+    // for now.
     if (viewState == null) {
-      ReactSoftException.logSoftException(
-          MountingManager.TAG,
-          new IllegalStateException(
-              "Unable to find viewState for tag: " + reactTag + " for commandId: " + commandId));
-      return;
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState for tag: " + reactTag + " for commandId: " + commandId);
     }
 
     if (viewState.mViewManager == null) {
-      throw new IllegalStateException("Unable to find viewState manager for tag " + reactTag);
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState manager for tag " + reactTag);
     }
 
     if (viewState.mView == null) {
-      throw new IllegalStateException("Unable to find viewState view for tag " + reactTag);
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState view for tag " + reactTag);
     }
 
     viewState.mViewManager.receiveCommand(viewState.mView, commandId, commandArgs);
@@ -202,11 +202,13 @@ public class MountingManager {
     ViewState viewState = getViewState(reactTag);
 
     if (viewState.mViewManager == null) {
-      throw new IllegalStateException("Unable to find viewState manager for tag " + reactTag);
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState manager for tag " + reactTag);
     }
 
     if (viewState.mView == null) {
-      throw new IllegalStateException("Unable to find viewState view for tag " + reactTag);
+      throw new RetryableMountingLayerException(
+          "Unable to find viewState view for tag " + reactTag);
     }
 
     viewState.mView.sendAccessibilityEvent(eventType);
@@ -238,6 +240,17 @@ public class MountingManager {
 
     if (parentView == null) {
       throw new IllegalStateException("Unable to find view for tag " + parentTag);
+    }
+
+    if (parentView.getChildCount() <= index) {
+      throw new IllegalStateException(
+          "Cannot remove child at index "
+              + index
+              + " from parent ViewGroup ["
+              + parentView.getId()
+              + "], only "
+              + parentView.getChildCount()
+              + " children in parent");
     }
 
     getViewGroupManager(viewState).removeViewAt(parentView, index);
@@ -372,37 +385,6 @@ public class MountingManager {
   }
 
   @UiThread
-  public void updateLocalData(int reactTag, @NonNull ReadableMap newLocalData) {
-    UiThreadUtil.assertOnUiThread();
-    ViewState viewState = getViewState(reactTag);
-    if (viewState.mCurrentProps == null) {
-      throw new IllegalStateException(
-          "Can not update local data to view without props: " + reactTag);
-    }
-    if (viewState.mCurrentLocalData != null
-        && newLocalData.hasKey("hash")
-        && viewState.mCurrentLocalData.getDouble("hash") == newLocalData.getDouble("hash")
-        && viewState.mCurrentLocalData.equals(newLocalData)) {
-      return;
-    }
-    viewState.mCurrentLocalData = newLocalData;
-
-    ViewManager viewManager = viewState.mViewManager;
-
-    if (viewManager == null) {
-      throw new IllegalStateException("Unable to find ViewManager for view: " + viewState);
-    }
-    Object extraData =
-        viewManager.updateLocalData(
-            viewState.mView,
-            viewState.mCurrentProps,
-            new ReactStylesDiffMap(viewState.mCurrentLocalData));
-    if (extraData != null) {
-      viewManager.updateExtraData(viewState.mView, extraData);
-    }
-  }
-
-  @UiThread
   public void updateState(final int reactTag, @Nullable StateWrapper stateWrapper) {
     UiThreadUtil.assertOnUiThread();
     ViewState viewState = getViewState(reactTag);
@@ -445,7 +427,13 @@ public class MountingManager {
   @UiThread
   public void updateEventEmitter(int reactTag, @NonNull EventEmitterWrapper eventEmitter) {
     UiThreadUtil.assertOnUiThread();
-    ViewState viewState = getViewState(reactTag);
+    ViewState viewState = mTagToViewState.get(reactTag);
+    if (viewState == null) {
+      // TODO T62717437 - Use a flag to determine that these event emitters belong to virtual nodes
+      // only.
+      viewState = new ViewState(reactTag, null, null);
+      mTagToViewState.put(reactTag, viewState);
+    }
     viewState.mEventEmitter = eventEmitter;
   }
 
@@ -512,11 +500,21 @@ public class MountingManager {
       float width,
       @NonNull YogaMeasureMode widthMode,
       float height,
-      @NonNull YogaMeasureMode heightMode) {
+      @NonNull YogaMeasureMode heightMode,
+      @Nullable float[] attachmentsPositions) {
 
     return mViewManagerRegistry
         .get(componentName)
-        .measure(context, localData, props, state, width, widthMode, height, heightMode);
+        .measure(
+            context,
+            localData,
+            props,
+            state,
+            width,
+            widthMode,
+            height,
+            heightMode,
+            attachmentsPositions);
   }
 
   @AnyThread

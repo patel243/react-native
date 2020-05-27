@@ -5,15 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#pragma once
+
+#import <memory>
+
 #import "RCTTurboModule.h"
 
 @protocol RCTTurboModuleManagerDelegate <NSObject>
 
 // TODO: Move to xplat codegen.
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:(const std::string &)name
-                                                       instance:(id<RCTTurboModule>)instance
-                                                      jsInvoker:
-                                                          (std::shared_ptr<facebook::react::CallInvoker>)jsInvoker;
+                                                     initParams:
+                                                         (const facebook::react::ObjCTurboModule::InitParams &)params;
 
 @optional
 

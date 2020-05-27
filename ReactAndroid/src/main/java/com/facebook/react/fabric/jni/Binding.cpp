@@ -15,18 +15,18 @@
 #include <fbjni/fbjni.h>
 #include <jsi/JSIDynamic.h>
 #include <jsi/jsi.h>
+#include <react/animations/LayoutAnimationDriver.h>
+#include <react/componentregistry/ComponentDescriptorFactory.h>
 #include <react/components/scrollview/ScrollViewProps.h>
 #include <react/core/EventBeat.h>
 #include <react/core/EventEmitter.h>
 #include <react/core/conversions.h>
 #include <react/debug/SystraceSection.h>
-#include <react/uimanager/ComponentDescriptorFactory.h>
-#include <react/uimanager/Scheduler.h>
-#include <react/uimanager/SchedulerDelegate.h>
-#include <react/uimanager/SchedulerToolbox.h>
+#include <react/scheduler/Scheduler.h>
+#include <react/scheduler/SchedulerDelegate.h>
+#include <react/scheduler/SchedulerToolbox.h>
 #include <react/uimanager/primitives.h>
 #include <react/utils/ContextContainer.h>
-#include <react/utils/TimeUtils.h>
 
 #include <Glog/logging.h>
 
@@ -73,6 +73,10 @@ std::shared_ptr<Scheduler> Binding::getScheduler() {
   return scheduler_;
 }
 
+LayoutAnimationDriver *Binding::getAnimationDriver() {
+  return (animationDriver_ ? animationDriver_.get() : nullptr);
+}
+
 void Binding::startSurface(
     jint surfaceId,
     jni::alias_ref<jstring> moduleName,
@@ -92,7 +96,8 @@ void Binding::startSurface(
       moduleName->toStdString(),
       initialProps->consume(),
       {},
-      context);
+      context,
+      getAnimationDriver());
 }
 
 void Binding::startSurfaceWithConstraints(
@@ -102,11 +107,16 @@ void Binding::startSurfaceWithConstraints(
     jfloat minWidth,
     jfloat maxWidth,
     jfloat minHeight,
-    jfloat maxHeight) {
+    jfloat maxHeight,
+    jboolean isRTL,
+    jboolean doLeftAndRightSwapInRTL) {
   SystraceSection s("FabricUIManagerBinding::startSurfaceWithConstraints");
 
-  LOG(WARNING) << "Binding::startSurfaceWithConstraints() was called (address: "
-               << this << ", surfaceId: " << surfaceId << ").";
+  if (enableFabricLogs_) {
+    LOG(WARNING)
+        << "Binding::startSurfaceWithConstraints() was called (address: "
+        << this << ", surfaceId: " << surfaceId << ").";
+  }
 
   std::shared_ptr<Scheduler> scheduler = getScheduler();
   if (!scheduler) {
@@ -121,16 +131,20 @@ void Binding::startSurfaceWithConstraints(
 
   LayoutContext context;
   context.pointScaleFactor = {pointScaleFactor_};
+  context.swapLeftAndRightInRTL = doLeftAndRightSwapInRTL;
   LayoutConstraints constraints = {};
   constraints.minimumSize = minimumSize;
   constraints.maximumSize = maximumSize;
+  constraints.layoutDirection =
+      isRTL ? LayoutDirection::RightToLeft : LayoutDirection::LeftToRight;
 
   scheduler->startSurface(
       surfaceId,
       moduleName->toStdString(),
       initialProps->consume(),
       constraints,
-      context);
+      context,
+      getAnimationDriver());
 }
 
 void Binding::renderTemplateToSurface(jint surfaceId, jstring uiTemplate) {
@@ -151,8 +165,10 @@ void Binding::renderTemplateToSurface(jint surfaceId, jstring uiTemplate) {
 void Binding::stopSurface(jint surfaceId) {
   SystraceSection s("FabricUIManagerBinding::stopSurface");
 
-  LOG(WARNING) << "Binding::stopSurface() was called (address: " << this
-               << ", surfaceId: " << surfaceId << ").";
+  if (enableFabricLogs_) {
+    LOG(WARNING) << "Binding::stopSurface() was called (address: " << this
+                 << ", surfaceId: " << surfaceId << ").";
+  }
 
   std::shared_ptr<Scheduler> scheduler = getScheduler();
   if (!scheduler) {
@@ -168,7 +184,9 @@ void Binding::setConstraints(
     jfloat minWidth,
     jfloat maxWidth,
     jfloat minHeight,
-    jfloat maxHeight) {
+    jfloat maxHeight,
+    jboolean isRTL,
+    jboolean doLeftAndRightSwapInRTL) {
   SystraceSection s("FabricUIManagerBinding::setConstraints");
 
   std::shared_ptr<Scheduler> scheduler = getScheduler();
@@ -184,9 +202,12 @@ void Binding::setConstraints(
 
   LayoutContext context;
   context.pointScaleFactor = {pointScaleFactor_};
+  context.swapLeftAndRightInRTL = doLeftAndRightSwapInRTL;
   LayoutConstraints constraints = {};
   constraints.minimumSize = minimumSize;
   constraints.maximumSize = maximumSize;
+  constraints.layoutDirection =
+      isRTL ? LayoutDirection::RightToLeft : LayoutDirection::LeftToRight;
 
   scheduler->constraintSurfaceLayout(surfaceId, constraints, context);
 }
@@ -200,8 +221,16 @@ void Binding::installFabricUIManager(
     jni::alias_ref<jobject> reactNativeConfig) {
   SystraceSection s("FabricUIManagerBinding::installFabricUIManager");
 
-  LOG(WARNING) << "Binding::installFabricUIManager() was called (address: "
-               << this << ").";
+  std::shared_ptr<const ReactNativeConfig> config =
+      std::make_shared<const ReactNativeConfigHolder>(reactNativeConfig);
+
+  enableFabricLogs_ =
+      config->getBool("react_fabric:enabled_android_fabric_logs");
+
+  if (enableFabricLogs_) {
+    LOG(WARNING) << "Binding::installFabricUIManager() was called (address: "
+                 << this << ").";
+  }
 
   // Use std::lock and std::adopt_lock to prevent deadlocks by locking mutexes
   // at the same time
@@ -244,8 +273,6 @@ void Binding::installFabricUIManager(
             ownerBox, eventBeatManager, runtimeExecutor, localJavaUIManager);
       };
 
-  std::shared_ptr<const ReactNativeConfig> config =
-      std::make_shared<const ReactNativeConfigHolder>(reactNativeConfig);
   contextContainer->insert("ReactNativeConfig", config);
   contextContainer->insert("FabricUIManager", javaUIManager_);
 
@@ -255,10 +282,12 @@ void Binding::installFabricUIManager(
       "react_fabric:enable_removedelete_collation_android");
   collapseDeleteCreateMountingInstructions_ = reactNativeConfig_->getBool(
       "react_fabric:enabled_collapse_delete_create_mounting_instructions");
-  ;
 
   disablePreallocateViews_ = reactNativeConfig_->getBool(
       "react_fabric:disabled_view_preallocation_android");
+
+  bool enableLayoutAnimations_ = reactNativeConfig_->getBool(
+      "react_fabric:enabled_layout_animations_android");
 
   auto toolbox = SchedulerToolbox{};
   toolbox.contextContainer = contextContainer;
@@ -266,12 +295,18 @@ void Binding::installFabricUIManager(
   toolbox.runtimeExecutor = runtimeExecutor;
   toolbox.synchronousEventBeatFactory = synchronousBeatFactory;
   toolbox.asynchronousEventBeatFactory = asynchronousBeatFactory;
-  scheduler_ = std::make_shared<Scheduler>(toolbox, this);
+
+  if (enableLayoutAnimations_) {
+    animationDriver_ = std::make_unique<LayoutAnimationDriver>(this);
+  }
+  scheduler_ = std::make_shared<Scheduler>(toolbox, getAnimationDriver(), this);
 }
 
 void Binding::uninstallFabricUIManager() {
-  LOG(WARNING) << "Binding::uninstallFabricUIManager() was called (address: "
-               << this << ").";
+  if (enableFabricLogs_) {
+    LOG(WARNING) << "Binding::uninstallFabricUIManager() was called (address: "
+                 << this << ").";
+  }
   // Use std::lock and std::adopt_lock to prevent deadlocks by locking mutexes
   // at the same time
   std::lock(schedulerMutex_, javaUIManagerMutex_);
@@ -846,6 +881,37 @@ void Binding::setPixelDensity(float pointScaleFactor) {
   pointScaleFactor_ = pointScaleFactor;
 }
 
+void Binding::onAnimationStarted() {
+  jni::global_ref<jobject> localJavaUIManager = getJavaUIManager();
+  if (!localJavaUIManager) {
+    LOG(ERROR) << "Binding::animationsStarted: JavaUIManager disappeared";
+    return;
+  }
+
+  static auto layoutAnimationsStartedJNI =
+      jni::findClassStatic(UIManagerJavaDescriptor)
+          ->getMethod<void()>("onAnimationStarted");
+
+  layoutAnimationsStartedJNI(localJavaUIManager);
+}
+void Binding::onAllAnimationsComplete() {
+  jni::global_ref<jobject> localJavaUIManager = getJavaUIManager();
+  if (!localJavaUIManager) {
+    LOG(ERROR) << "Binding::allAnimationsComplete: JavaUIManager disappeared";
+    return;
+  }
+
+  static auto allAnimationsCompleteJNI =
+      jni::findClassStatic(UIManagerJavaDescriptor)
+          ->getMethod<void()>("onAllAnimationsComplete");
+
+  allAnimationsCompleteJNI(localJavaUIManager);
+}
+
+void Binding::driveCxxAnimations() {
+  scheduler_->animationTick();
+}
+
 void Binding::schedulerDidRequestPreliminaryViewAllocation(
     const SurfaceId surfaceId,
     const ShadowView &shadowView) {
@@ -861,6 +927,10 @@ void Binding::schedulerDidRequestPreliminaryViewAllocation(
   }
 
   bool isLayoutableShadowNode = shadowView.layoutMetrics != EmptyLayoutMetrics;
+
+  if (disableVirtualNodePreallocation_ && !isLayoutableShadowNode) {
+    return;
+  }
 
   static auto preallocateView =
       jni::findClassStatic(UIManagerJavaDescriptor)
@@ -966,6 +1036,7 @@ void Binding::registerNatives() {
        makeNativeMethod("stopSurface", Binding::stopSurface),
        makeNativeMethod("setConstraints", Binding::setConstraints),
        makeNativeMethod("setPixelDensity", Binding::setPixelDensity),
+       makeNativeMethod("driveCxxAnimations", Binding::driveCxxAnimations),
        makeNativeMethod(
            "uninstallFabricUIManager", Binding::uninstallFabricUIManager)});
 }

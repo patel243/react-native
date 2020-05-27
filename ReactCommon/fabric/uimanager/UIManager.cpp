@@ -105,12 +105,8 @@ void UIManager::completeSurface(
                   /* .children = */ rootChildren,
               });
         },
-        true && stateReconciliationEnabled_);
+        true);
   });
-}
-
-void UIManager::setStateReconciliationEnabled(bool enabled) {
-  stateReconciliationEnabled_ = enabled;
 }
 
 void UIManager::setJSResponder(
@@ -128,10 +124,47 @@ void UIManager::clearJSResponder() const {
   }
 }
 
+ShadowNode::Shared UIManager::getNewestCloneOfShadowNode(
+    ShadowNode const &shadowNode) const {
+  auto findNewestChildInParent =
+      [&](auto const &parentNode) -> ShadowNode::Shared {
+    for (auto const &child : parentNode.getChildren()) {
+      if (ShadowNode::sameFamily(*child, shadowNode)) {
+        return child;
+      }
+    }
+    return nullptr;
+  };
+
+  auto ancestorShadowNode = ShadowNode::Shared{};
+  shadowTreeRegistry_.visit(
+      shadowNode.getSurfaceId(), [&](ShadowTree const &shadowTree) {
+        shadowTree.tryCommit(
+            [&](RootShadowNode::Shared const &oldRootShadowNode) {
+              ancestorShadowNode = oldRootShadowNode;
+              return nullptr;
+            },
+            true);
+      });
+
+  if (!ancestorShadowNode) {
+    return nullptr;
+  }
+
+  auto ancestors = shadowNode.getFamily().getAncestors(*ancestorShadowNode);
+
+  if (ancestors.empty()) {
+    return nullptr;
+  }
+
+  return findNewestChildInParent(ancestors.rbegin()->first.get());
+}
+
 ShadowNode::Shared UIManager::findNodeAtPoint(
-    const ShadowNode::Shared &node,
+    ShadowNode::Shared const &node,
     Point point) const {
-  return LayoutableShadowNode::findNodeAtPoint(node, point);
+  return LayoutableShadowNode::findNodeAtPoint(
+      getNewestCloneOfShadowNode(*node), point);
 }
 
 void UIManager::setNativeProps(
@@ -146,14 +179,16 @@ void UIManager::setNativeProps(
       shadowNode.getSurfaceId(), [&](ShadowTree const &shadowTree) {
         shadowTree.tryCommit(
             [&](RootShadowNode::Shared const &oldRootShadowNode) {
-              return oldRootShadowNode->clone(
-                  shadowNode.getFamily(), [&](ShadowNode const &oldShadowNode) {
-                    return oldShadowNode.clone({
-                        /* .props = */ props,
-                    });
-                  });
+              return std::static_pointer_cast<RootShadowNode>(
+                  oldRootShadowNode->cloneTree(
+                      shadowNode.getFamily(),
+                      [&](ShadowNode const &oldShadowNode) {
+                        return oldShadowNode.clone({
+                            /* .props = */ props,
+                        });
+                      }));
             },
-            true && stateReconciliationEnabled_);
+            true);
       });
 }
 
@@ -163,6 +198,10 @@ LayoutMetrics UIManager::getRelativeLayoutMetrics(
     LayoutableShadowNode::LayoutInspectingPolicy policy) const {
   SystraceSection s("UIManager::getRelativeLayoutMetrics");
 
+  // We might store here an owning pointer to `ancestorShadowNode` to ensure
+  // that the node is not deallocated during method execution lifetime.
+  auto owningAncestorShadowNode = ShadowNode::Shared{};
+
   if (!ancestorShadowNode) {
     shadowTreeRegistry_.visit(
         shadowNode.getSurfaceId(), [&](ShadowTree const &shadowTree) {
@@ -171,21 +210,25 @@ LayoutMetrics UIManager::getRelativeLayoutMetrics(
                 ancestorShadowNode = oldRootShadowNode.get();
                 return nullptr;
               },
-              true && stateReconciliationEnabled_);
+              true);
         });
+  } else {
+    // It is possible for JavaScript (or other callers) to have a reference
+    // to a previous version of ShadowNodes, but we enforce that
+    // metrics are only calculated on most recently committed versions.
+    owningAncestorShadowNode = getNewestCloneOfShadowNode(*ancestorShadowNode);
+    ancestorShadowNode = owningAncestorShadowNode.get();
   }
 
-  auto layoutableShadowNode =
-      dynamic_cast<const LayoutableShadowNode *>(&shadowNode);
   auto layoutableAncestorShadowNode =
-      dynamic_cast<const LayoutableShadowNode *>(ancestorShadowNode);
+      traitCast<LayoutableShadowNode const *>(ancestorShadowNode);
 
-  if (!layoutableShadowNode || !layoutableAncestorShadowNode) {
+  if (!layoutableAncestorShadowNode) {
     return EmptyLayoutMetrics;
   }
 
-  return layoutableShadowNode->getRelativeLayoutMetrics(
-      *layoutableAncestorShadowNode, policy);
+  return LayoutableShadowNode::computeRelativeLayoutMetrics(
+      shadowNode.getFamily(), *layoutableAncestorShadowNode, policy);
 }
 
 void UIManager::updateState(StateUpdate const &stateUpdate) const {
@@ -197,19 +240,20 @@ void UIManager::updateState(StateUpdate const &stateUpdate) const {
       family->getSurfaceId(), [&](ShadowTree const &shadowTree) {
         shadowTree.tryCommit([&](RootShadowNode::Shared const
                                      &oldRootShadowNode) {
-          return oldRootShadowNode->clone(
+          return std::static_pointer_cast<
+              RootShadowNode>(oldRootShadowNode->cloneTree(
               *family, [&](ShadowNode const &oldShadowNode) {
                 auto newData =
                     callback(oldShadowNode.getState()->getDataPointer());
                 auto newState =
-                    componentDescriptor.createState(family, newData);
+                    componentDescriptor.createState(*family, newData);
 
                 return oldShadowNode.clone({
                     /* .props = */ ShadowNodeFragment::propsPlaceholder(),
                     /* .children = */ ShadowNodeFragment::childrenPlaceholder(),
                     /* .state = */ newState,
                 });
-              });
+              }));
         });
       });
 }
@@ -220,6 +264,16 @@ void UIManager::dispatchCommand(
     folly::dynamic const args) const {
   if (delegate_) {
     delegate_->uiManagerDidDispatchCommand(shadowNode, commandName, args);
+  }
+}
+
+void UIManager::configureNextLayoutAnimation(
+    RawValue const &config,
+    SharedEventTarget successCallback,
+    SharedEventTarget errorCallback) const {
+  if (animationDelegate_) {
+    animationDelegate_->uiManagerDidConfigureNextLayoutAnimation(
+        config, successCallback, errorCallback);
   }
 }
 
@@ -259,6 +313,23 @@ void UIManager::shadowTreeDidFinishTransaction(
 
   if (delegate_) {
     delegate_->uiManagerDidFinishTransaction(mountingCoordinator);
+  }
+}
+
+#pragma mark - UIManagerAnimationDelegate
+
+void UIManager::setAnimationDelegate(
+    UIManagerAnimationDelegate *delegate) const {
+  animationDelegate_ = delegate;
+}
+
+void UIManager::animationTick() {
+  if (animationDelegate_ != nullptr &&
+      animationDelegate_->shouldAnimateFrame()) {
+    shadowTreeRegistry_.enumerate(
+        [&](ShadowTree const &shadowTree, bool &stop) {
+          shadowTree.notifyDelegatesOfUpdates();
+        });
   }
 }
 

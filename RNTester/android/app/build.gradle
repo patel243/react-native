@@ -65,12 +65,13 @@ plugins {
  */
 
 project.ext.react = [
+    cliPath: "$rootDir/cli.js",
     bundleAssetName: "RNTesterApp.android.bundle",
     entryFile: file("../../js/RNTesterApp.android.js"),
     root: "$rootDir",
     inputExcludes: ["android/**", "./**", ".gradle/**"],
     composeSourceMapsPath: "$rootDir/scripts/compose-source-maps.js",
-    hermesCommand: "../../../node_modules/hermes-engine/%OS-BIN%/hermes",
+    hermesCommand: "../../../node_modules/hermes-engine/%OS-BIN%/hermesc",
     enableHermesForVariant: { def v -> v.name.contains("hermes") }
 ]
 

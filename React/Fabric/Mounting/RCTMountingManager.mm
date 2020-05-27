@@ -135,6 +135,8 @@ static void RNPerformMountInstructions(
 {
   SystraceSection s("RNPerformMountInstructions");
 
+  [CATransaction begin];
+  [CATransaction setValue:(id)kCFBooleanTrue forKey:kCATransactionDisableActions];
   for (auto const &mutation : mutations) {
     switch (mutation.type) {
       case ShadowViewMutation::Create: {
@@ -189,6 +191,7 @@ static void RNPerformMountInstructions(
       }
     }
   }
+  [CATransaction commit];
 }
 
 @implementation RCTMountingManager {
@@ -271,7 +274,7 @@ static void RNPerformMountInstructions(
   auto surfaceId = transaction->getSurfaceId();
   auto &mutations = transaction->getMutations();
 
-  if (mutations.size() == 0) {
+  if (mutations.empty()) {
     return;
   }
 

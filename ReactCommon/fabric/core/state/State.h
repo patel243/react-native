@@ -25,6 +25,8 @@ class State {
  public:
   using Shared = std::shared_ptr<const State>;
 
+  static size_t constexpr initialRevisionValue = 1;
+
  protected:
   /*
    * Constructors are protected to make calling them directly with
@@ -44,6 +46,12 @@ class State {
    * Sequential calls might return different values.
    */
   State::Shared getMostRecentState() const;
+
+  /*
+   * Returns the most recent state (same as `getMostRecentState()` method)
+   * if this state is obsolete, otherwise returns `nullptr`.
+   */
+  State::Shared getMostRecentStateIfObsolete() const;
 
   /*
    * Returns a revision number of the `State` object.

@@ -76,8 +76,7 @@ function reportException(
     message =
       e.jsEngine == null ? message : `${message}, js engine: ${e.jsEngine}`;
 
-    const isHandledByLogBox =
-      e.forceRedbox !== true && global.__unstable_isLogBoxEnabled === true;
+    const isHandledByLogBox = e.forceRedbox !== true && !global.RN$Bridgeless;
 
     const data = preprocessException({
       message,
@@ -221,7 +220,7 @@ function reactConsoleErrorHandler() {
       /*reportToConsole*/ false,
     );
   } else {
-    const stringifySafe = require('../Utilities/stringifySafe');
+    const stringifySafe = require('../Utilities/stringifySafe').default;
     const str = Array.prototype.map
       .call(arguments, value =>
         typeof value === 'string' ? value : stringifySafe(value),

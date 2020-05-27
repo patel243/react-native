@@ -39,11 +39,12 @@ Pod::Spec.new do |s|
   s.name                   = "React-Core"
   s.version                = version
   s.summary                = "The core of React Native."
-  s.homepage               = "http://facebook.github.io/react-native/"
+  s.homepage               = "https://reactnative.dev/"
   s.license                = package["license"]
   s.author                 = "Facebook, Inc. and its affiliates"
   s.platforms              = { :ios => "10.0", :tvos => "10.0" }
   s.source                 = source
+  s.resource_bundle        = { "AccessibilityResources" => ["React/AccessibilityResources/*.lproj"]}
   s.compiler_flags         = folly_compiler_flags + ' ' + boost_compiler_flags
   s.header_dir             = "React"
   s.framework              = "JavaScriptCore"
@@ -93,6 +94,7 @@ Pod::Spec.new do |s|
 
   s.dependency "Folly", folly_version
   s.dependency "React-cxxreact", version
+  s.dependency "React-perflogger", version
   s.dependency "React-jsi", version
   s.dependency "React-jsiexecutor", version
   s.dependency "Yoga"

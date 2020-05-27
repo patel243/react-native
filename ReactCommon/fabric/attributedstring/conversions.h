@@ -448,6 +448,11 @@ inline ParagraphAttributes convertRawProp(
       "maximumFontSize",
       sourceParagraphAttributes.maximumFontSize,
       defaultParagraphAttributes.maximumFontSize);
+  paragraphAttributes.includeFontPadding = convertRawProp(
+      rawProps,
+      "includeFontPadding",
+      sourceParagraphAttributes.includeFontPadding,
+      defaultParagraphAttributes.includeFontPadding);
 
   return paragraphAttributes;
 }
@@ -481,7 +486,30 @@ inline folly::dynamic toDynamic(
   values("ellipsizeMode", toString(paragraphAttributes.ellipsizeMode));
   values("textBreakStrategy", toString(paragraphAttributes.textBreakStrategy));
   values("adjustsFontSizeToFit", paragraphAttributes.adjustsFontSizeToFit);
+  values("includeFontPadding", paragraphAttributes.includeFontPadding);
+
   return values;
+}
+
+inline folly::dynamic toDynamic(const FontVariant &fontVariant) {
+  auto result = folly::dynamic::array();
+  if ((int)fontVariant & (int)FontVariant::SmallCaps) {
+    result.push_back("small-caps");
+  }
+  if ((int)fontVariant & (int)FontVariant::OldstyleNums) {
+    result.push_back("oldstyle-nums");
+  }
+  if ((int)fontVariant & (int)FontVariant::LiningNums) {
+    result.push_back("lining-nums");
+  }
+  if ((int)fontVariant & (int)FontVariant::TabularNums) {
+    result.push_back("tabular-nums");
+  }
+  if ((int)fontVariant & (int)FontVariant::ProportionalNums) {
+    result.push_back("proportional-nums");
+  }
+
+  return result;
 }
 
 inline folly::dynamic toDynamic(const TextAttributes &textAttributes) {
@@ -513,7 +541,7 @@ inline folly::dynamic toDynamic(const TextAttributes &textAttributes) {
     _textAttributes("fontStyle", toString(*textAttributes.fontStyle));
   }
   if (textAttributes.fontVariant.has_value()) {
-    _textAttributes("fontVariant", toString(*textAttributes.fontVariant));
+    _textAttributes("fontVariant", toDynamic(*textAttributes.fontVariant));
   }
   if (textAttributes.allowFontScaling.has_value()) {
     _textAttributes("allowFontScaling", *textAttributes.allowFontScaling);
@@ -579,6 +607,13 @@ inline folly::dynamic toDynamic(const AttributedString &attributedString) {
     dynamicFragment["string"] = fragment.string;
     if (fragment.parentShadowView.componentHandle) {
       dynamicFragment["reactTag"] = fragment.parentShadowView.tag;
+    }
+    if (fragment.isAttachment()) {
+      dynamicFragment["isAttachment"] = true;
+      dynamicFragment["width"] =
+          fragment.parentShadowView.layoutMetrics.frame.size.width;
+      dynamicFragment["height"] =
+          fragment.parentShadowView.layoutMetrics.frame.size.height;
     }
     dynamicFragment["textAttributes"] = toDynamic(fragment.textAttributes);
     fragments.push_back(dynamicFragment);

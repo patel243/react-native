@@ -25,7 +25,7 @@ Pod::Spec.new do |s|
   s.name                   = "React-Fabric"
   s.version                = version
   s.summary                = "Fabric for React Native."
-  s.homepage               = "http://facebook.github.io/react-native/"
+  s.homepage               = "https://reactnative.dev/"
   s.license                = package["license"]
   s.author                 = "Facebook, Inc. and its affiliates"
   s.platforms              = { :ios => "10.0", :tvos => "10.0" }
@@ -42,6 +42,7 @@ Pod::Spec.new do |s|
   s.dependency "RCTRequired", version
   s.dependency "RCTTypeSafety", version
   s.dependency "ReactCommon/turbomodule/core", version
+  s.dependency "React-jsi", version
 
   s.subspec "attributedstring" do |ss|
     ss.dependency             folly_dep_name, folly_version

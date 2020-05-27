@@ -21,7 +21,7 @@ State::State(StateData::Shared const &data, State const &state)
 State::State(
     StateData::Shared const &data,
     ShadowNodeFamily::Shared const &family)
-    : family_(family), data_(data), revision_{1} {};
+    : family_(family), data_(data), revision_{State::initialRevisionValue} {};
 
 State::Shared State::getMostRecentState() const {
   auto family = family_.lock();
@@ -30,6 +30,15 @@ State::Shared State::getMostRecentState() const {
   }
 
   return family->getMostRecentState();
+}
+
+State::Shared State::getMostRecentStateIfObsolete() const {
+  auto family = family_.lock();
+  if (!family) {
+    return {};
+  }
+
+  return family->getMostRecentStateIfObsolete(*this);
 }
 
 size_t State::getRevision() const {

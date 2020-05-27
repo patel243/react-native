@@ -470,7 +470,9 @@ public class ReactInstanceManager {
     } else {
       DeviceEventManagerModule deviceEventManagerModule =
           reactContext.getNativeModule(DeviceEventManagerModule.class);
-      deviceEventManagerModule.emitHardwareBackPressed();
+      if (deviceEventManagerModule != null) {
+        deviceEventManagerModule.emitHardwareBackPressed();
+      }
     }
   }
 
@@ -497,7 +499,9 @@ public class ReactInstanceManager {
               || NfcAdapter.ACTION_NDEF_DISCOVERED.equals(action))) {
         DeviceEventManagerModule deviceEventManagerModule =
             currentContext.getNativeModule(DeviceEventManagerModule.class);
-        deviceEventManagerModule.emitNewIntentReceived(uri);
+        if (deviceEventManagerModule != null) {
+          deviceEventManagerModule.emitNewIntentReceived(uri);
+        }
       }
       currentContext.onNewIntent(mCurrentActivity, intent);
     }
@@ -775,9 +779,12 @@ public class ReactInstanceManager {
 
     ReactContext currentReactContext = getCurrentReactContext();
     if (currentReactContext != null) {
-      currentReactContext
-          .getNativeModule(AppearanceModule.class)
-          .onConfigurationChanged(updatedContext);
+      AppearanceModule appearanceModule =
+          currentReactContext.getNativeModule(AppearanceModule.class);
+
+      if (appearanceModule != null) {
+        appearanceModule.onConfigurationChanged(updatedContext);
+      }
     }
   }
 
@@ -1036,6 +1043,12 @@ public class ReactInstanceManager {
                           try {
                             setupReactContext(reactApplicationContext);
                           } catch (Exception e) {
+                            // TODO T62192299: remove this after investigation
+                            FLog.e(
+                                ReactConstants.TAG,
+                                "ReactInstanceManager caught exception in setupReactContext",
+                                e);
+
                             mDevSupportManager.handleException(e);
                           }
                         }
@@ -1121,7 +1134,8 @@ public class ReactInstanceManager {
   }
 
   private void attachRootViewToInstance(final ReactRoot reactRoot) {
-    FLog.d(ReactConstants.TAG, "ReactInstanceManager.attachRootViewToInstance()");
+    // TODO: downgrade back to FLog.d once T62192299 is resolved.
+    FLog.e(ReactConstants.TAG, "ReactInstanceManager.attachRootViewToInstance()");
     Systrace.beginSection(TRACE_TAG_REACT_JAVA_BRIDGE, "attachRootViewToInstance");
 
     @Nullable
@@ -1131,28 +1145,57 @@ public class ReactInstanceManager {
     // If we can't get a UIManager something has probably gone horribly wrong
     if (uiManager == null) {
       throw new IllegalStateException(
-          "Unable to attache a rootView to ReactInstance when UIManager is not properly initialized.");
+          "Unable to attach a rootView to ReactInstance when UIManager is not properly initialized.");
     }
 
     @Nullable Bundle initialProperties = reactRoot.getAppProperties();
 
-    final int rootTag =
-        uiManager.addRootView(
-            reactRoot.getRootViewGroup(),
-            initialProperties == null
-                ? new WritableNativeMap()
-                : Arguments.fromBundle(initialProperties),
-            reactRoot.getInitialUITemplate());
-    reactRoot.setRootViewTag(rootTag);
-    if (reactRoot.getUIManagerType() == FABRIC) {
-      // Fabric requires to call updateRootLayoutSpecs before starting JS Application,
-      // this ensures the root will hace the correct pointScaleFactor.
-      uiManager.updateRootLayoutSpecs(
-          rootTag, reactRoot.getWidthMeasureSpec(), reactRoot.getHeightMeasureSpec());
-      reactRoot.setShouldLogContentAppeared(true);
+    final int rootTag;
+
+    if (ReactFeatureFlags.enableFabricStartSurfaceWithLayoutMetrics) {
+      if (reactRoot.getUIManagerType() == FABRIC) {
+        rootTag =
+            uiManager.startSurface(
+                reactRoot.getRootViewGroup(),
+                reactRoot.getJSModuleName(),
+                initialProperties == null
+                    ? new WritableNativeMap()
+                    : Arguments.fromBundle(initialProperties),
+                reactRoot.getWidthMeasureSpec(),
+                reactRoot.getHeightMeasureSpec());
+        reactRoot.setRootViewTag(rootTag);
+        reactRoot.setShouldLogContentAppeared(true);
+      } else {
+        rootTag =
+            uiManager.addRootView(
+                reactRoot.getRootViewGroup(),
+                initialProperties == null
+                    ? new WritableNativeMap()
+                    : Arguments.fromBundle(initialProperties),
+                reactRoot.getInitialUITemplate());
+        reactRoot.setRootViewTag(rootTag);
+        reactRoot.runApplication();
+      }
     } else {
-      reactRoot.runApplication();
+      rootTag =
+          uiManager.addRootView(
+              reactRoot.getRootViewGroup(),
+              initialProperties == null
+                  ? new WritableNativeMap()
+                  : Arguments.fromBundle(initialProperties),
+              reactRoot.getInitialUITemplate());
+      reactRoot.setRootViewTag(rootTag);
+      if (reactRoot.getUIManagerType() == FABRIC) {
+        // Fabric requires to call updateRootLayoutSpecs before starting JS Application,
+        // this ensures the root will hace the correct pointScaleFactor.
+        uiManager.updateRootLayoutSpecs(
+            rootTag, reactRoot.getWidthMeasureSpec(), reactRoot.getHeightMeasureSpec());
+        reactRoot.setShouldLogContentAppeared(true);
+      } else {
+        reactRoot.runApplication();
+      }
     }
+
     Systrace.beginAsyncSection(
         TRACE_TAG_REACT_JAVA_BRIDGE, "pre_rootView.onAttachedToReactInstance", rootTag);
     UiThreadUtil.runOnUiThread(
@@ -1238,14 +1281,39 @@ public class ReactInstanceManager {
 
     reactContext.initializeWithInstance(catalystInstance);
 
+    if (ReactFeatureFlags.enableTurboModuleDebugLogs) {
+      // TODO(T46487253): Remove after task is closed
+      FLog.e(
+          ReactConstants.TAG,
+          "ReactInstanceManager.createReactContext: mJSIModulePackage "
+              + (mJSIModulePackage != null ? "not null" : "null"));
+    }
+
     if (mJSIModulePackage != null) {
       catalystInstance.addJSIModules(
           mJSIModulePackage.getJSIModules(
               reactContext, catalystInstance.getJavaScriptContextHolder()));
 
+      if (ReactFeatureFlags.enableTurboModuleDebugLogs) {
+        // TODO(T46487253): Remove after task is closed
+        FLog.e(
+            ReactConstants.TAG,
+            "ReactInstanceManager.createReactContext: ReactFeatureFlags.useTurboModules == "
+                + (ReactFeatureFlags.useTurboModules == false ? "false" : "true"));
+      }
+
       if (ReactFeatureFlags.useTurboModules) {
         JSIModule turboModuleManager =
             catalystInstance.getJSIModule(JSIModuleType.TurboModuleManager);
+
+        if (ReactFeatureFlags.enableTurboModuleDebugLogs) {
+          // TODO(T46487253): Remove after task is closed
+          FLog.e(
+              ReactConstants.TAG,
+              "ReactInstanceManager.createReactContext: TurboModuleManager "
+                  + (turboModuleManager == null ? "not created" : "created"));
+        }
+
         catalystInstance.setTurboModuleManager(turboModuleManager);
 
         TurboModuleRegistry registry = (TurboModuleRegistry) turboModuleManager;
@@ -1255,6 +1323,9 @@ public class ReactInstanceManager {
           registry.getModule(moduleName);
         }
       }
+    }
+    if (ReactFeatureFlags.eagerInitializeFabric) {
+      catalystInstance.getJSIModule(JSIModuleType.UIManager);
     }
     if (mBridgeIdleDebugListener != null) {
       catalystInstance.addBridgeIdleDebugListener(mBridgeIdleDebugListener);

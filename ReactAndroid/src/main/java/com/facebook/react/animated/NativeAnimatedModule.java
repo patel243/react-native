@@ -7,7 +7,9 @@
 
 package com.facebook.react.animated;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.UiThread;
 import com.facebook.common.logging.FLog;
 import com.facebook.fbreact.specs.NativeAnimatedModuleSpec;
 import com.facebook.infer.annotation.Assertions;
@@ -16,6 +18,8 @@ import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.UIManager;
+import com.facebook.react.bridge.UIManagerListener;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.common.ReactConstants;
 import com.facebook.react.common.annotations.VisibleForTesting;
@@ -26,8 +30,9 @@ import com.facebook.react.uimanager.GuardedFrameCallback;
 import com.facebook.react.uimanager.NativeViewHierarchyManager;
 import com.facebook.react.uimanager.UIBlock;
 import com.facebook.react.uimanager.UIManagerModule;
-import com.facebook.react.uimanager.UIManagerModuleListener;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Module that exposes interface for creating and managing animated nodes on the "native" side.
@@ -58,12 +63,12 @@ import java.util.ArrayList;
  * stores a mapping from the view properties to the corresponding animated values (so it's actually
  * also a node with connections to the value nodes).
  *
- * <p>Last "special" elements of the the graph are "animation drivers". Those are objects
- * (represented as a graph nodes too) that based on some criteria updates attached values every
- * frame (we have few types of those, e.g., spring, timing, decay). Animation objects can be
- * "started" and "stopped". Those are like "pulse generators" for the rest of the nodes graph. Those
- * pulses then propagate along the graph to the children nodes up to the special node type:
- * AnimatedProps which then can be used to calculate property update map for a view.
+ * <p>Last "special" elements of the graph are "animation drivers". Those are objects (represented
+ * as a graph nodes too) that based on some criteria updates attached values every frame (we have
+ * few types of those, e.g., spring, timing, decay). Animation objects can be "started" and
+ * "stopped". Those are like "pulse generators" for the rest of the nodes graph. Those pulses then
+ * propagate along the graph to the children nodes up to the special node type: AnimatedProps which
+ * then can be used to calculate property update map for a view.
  *
  * <p>This class acts as a proxy between the "native" API that can be called from JS and the main
  * class that coordinates all the action: {@link NativeAnimatedNodesManager}. Since all the methods
@@ -75,7 +80,7 @@ import java.util.ArrayList;
  */
 @ReactModule(name = NativeAnimatedModule.NAME)
 public class NativeAnimatedModule extends NativeAnimatedModuleSpec
-    implements LifecycleEventListener, UIManagerModuleListener {
+    implements LifecycleEventListener, UIManagerListener {
 
   public static final String NAME = "NativeAnimatedModule";
 
@@ -83,10 +88,13 @@ public class NativeAnimatedModule extends NativeAnimatedModuleSpec
     void execute(NativeAnimatedNodesManager animatedNodesManager);
   }
 
-  private final GuardedFrameCallback mAnimatedFrameCallback;
+  @NonNull private final GuardedFrameCallback mAnimatedFrameCallback;
   private final ReactChoreographer mReactChoreographer;
-  private ArrayList<UIThreadOperation> mOperations = new ArrayList<>();
-  private ArrayList<UIThreadOperation> mPreOperations = new ArrayList<>();
+  @NonNull private List<UIThreadOperation> mOperations = new ArrayList<>();
+  @NonNull private List<UIThreadOperation> mPreOperations = new ArrayList<>();
+
+  @NonNull private List<UIBlock> mPreOperationsUIBlock = new ArrayList<>();
+  @NonNull private List<UIBlock> mOperationsUIBlock = new ArrayList<>();
 
   private @Nullable NativeAnimatedNodesManager mNodesManager;
 
@@ -127,13 +135,12 @@ public class NativeAnimatedModule extends NativeAnimatedModuleSpec
   public void initialize() {
     ReactApplicationContext reactApplicationContext = getReactApplicationContextIfActiveOrWarn();
 
-    if (reactApplicationContext != null) {
+    // TODO T59412313 Implement this API on FabricUIManager to use in bridgeless mode
+    if (reactApplicationContext != null && !reactApplicationContext.isBridgeless()) {
       reactApplicationContext.addLifecycleEventListener(this);
-      if (!reactApplicationContext.isBridgeless()) {
-        // TODO T59412313 Implement this API on FabricUIManager to use in bridgeless mode
-        UIManagerModule uiManager = reactApplicationContext.getNativeModule(UIManagerModule.class);
-        uiManager.addUIManagerListener(this);
-      }
+      UIManagerModule uiManager =
+          Assertions.assertNotNull(reactApplicationContext.getNativeModule(UIManagerModule.class));
+      uiManager.addUIManagerEventListener(this);
     }
   }
 
@@ -142,35 +149,94 @@ public class NativeAnimatedModule extends NativeAnimatedModuleSpec
     enqueueFrameCallback();
   }
 
+  // For FabricUIManager
   @Override
-  public void willDispatchViewUpdates(final UIManagerModule uiManager) {
+  @UiThread
+  public void willDispatchPreMountItems() {
+    if (mPreOperationsUIBlock.size() != 0) {
+      List<UIBlock> preOperations = mPreOperationsUIBlock;
+      mPreOperationsUIBlock = new ArrayList<>();
+
+      for (UIBlock op : preOperations) {
+        op.execute(null);
+      }
+    }
+  }
+
+  // For FabricUIManager
+  @Override
+  @UiThread
+  public void willDispatchMountItems() {
+    if (mOperationsUIBlock.size() != 0) {
+      List<UIBlock> operations = mOperationsUIBlock;
+      mOperationsUIBlock = new ArrayList<>();
+
+      for (UIBlock op : operations) {
+        op.execute(null);
+      }
+    }
+  }
+
+  // For non-FabricUIManager
+  @Override
+  @UiThread
+  public void willDispatchViewUpdates(final UIManager uiManager) {
     if (mOperations.isEmpty() && mPreOperations.isEmpty()) {
       return;
     }
-    final ArrayList<UIThreadOperation> preOperations = mPreOperations;
-    final ArrayList<UIThreadOperation> operations = mOperations;
+
+    final AtomicBoolean hasRunPreOperations = new AtomicBoolean(false);
+    final AtomicBoolean hasRunOperations = new AtomicBoolean(false);
+    final List<UIThreadOperation> preOperations = mPreOperations;
+    final List<UIThreadOperation> operations = mOperations;
     mPreOperations = new ArrayList<>();
     mOperations = new ArrayList<>();
-    uiManager.prependUIBlock(
+
+    // This is kind of a hack. Basically UIManagerListener cannot import UIManagerModule
+    // (that would cause an import cycle) and they're not in the same package. But,
+    // UIManagerModule is the only thing that calls `willDispatchViewUpdates` so we
+    // know this is safe.
+    // This goes away entirely in Fabric/Venice.
+    UIManagerModule uiManagerModule = (UIManagerModule) uiManager;
+
+    UIBlock preOperationsUIBlock =
         new UIBlock() {
           @Override
           public void execute(NativeViewHierarchyManager nativeViewHierarchyManager) {
+            if (!hasRunPreOperations.compareAndSet(false, true)) {
+              return;
+            }
+
             NativeAnimatedNodesManager nodesManager = getNodesManager();
             for (UIThreadOperation operation : preOperations) {
               operation.execute(nodesManager);
             }
           }
-        });
-    uiManager.addUIBlock(
+        };
+
+    UIBlock operationsUIBlock =
         new UIBlock() {
           @Override
           public void execute(NativeViewHierarchyManager nativeViewHierarchyManager) {
+            if (!hasRunOperations.compareAndSet(false, true)) {
+              return;
+            }
+
             NativeAnimatedNodesManager nodesManager = getNodesManager();
             for (UIThreadOperation operation : operations) {
               operation.execute(nodesManager);
             }
           }
-        });
+        };
+
+    // Queue up operations for Fabric
+    mPreOperationsUIBlock.add(preOperationsUIBlock);
+    mOperationsUIBlock.add(operationsUIBlock);
+
+    // Here we queue up the UI Blocks for the old, non-Fabric UIManager.
+    // We queue them in both systems, let them race, and see which wins.
+    uiManagerModule.prependUIBlock(preOperationsUIBlock);
+    uiManagerModule.addUIBlock(operationsUIBlock);
   }
 
   @Override
@@ -193,7 +259,9 @@ public class NativeAnimatedModule extends NativeAnimatedModuleSpec
       ReactApplicationContext reactApplicationContext = getReactApplicationContextIfActiveOrWarn();
 
       if (reactApplicationContext != null) {
-        UIManagerModule uiManager = reactApplicationContext.getNativeModule(UIManagerModule.class);
+        UIManagerModule uiManager =
+            Assertions.assertNotNull(
+                reactApplicationContext.getNativeModule(UIManagerModule.class));
         mNodesManager = new NativeAnimatedNodesManager(uiManager);
       }
     }

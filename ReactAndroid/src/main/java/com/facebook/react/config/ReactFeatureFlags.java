@@ -16,15 +16,6 @@ package com.facebook.react.config;
  */
 public class ReactFeatureFlags {
 
-  /** Whether we should load a specific view manager immediately or when it is accessed by JS */
-  public static boolean lazilyLoadViewManagers = false;
-
-  /** Reduce the number of Java-JS interops while accessing native arrays */
-  public static boolean useArrayNativeAccessor = false;
-
-  /** Reduce the number of Java-JS interops while accessing native maps */
-  public static boolean useMapNativeAccessor = false;
-
   /**
    * Should this application use TurboModules? If yes, then any module that inherits {@link
    * com.facebook.react.turbomodule.core.interfaces.TurboModule} will NOT be passed in to C++
@@ -32,17 +23,8 @@ public class ReactFeatureFlags {
    */
   public static volatile boolean useTurboModules = false;
 
-  /**
-   * Log tags of when a view deleted on the native side {@link
-   * com.facebook.react.uimanager.NativeViewHierarchyManager dropView}
-   */
-  public static boolean logDroppedViews = false;
-
-  /*
-   * This feature flag enables extra logging on ReactWebViews.
-   * Default value is false.
-   */
-  public static boolean enableExtraWebViewLogs = false;
+  /** Should we output debug logs to debug the TurboModule infra? */
+  public static volatile boolean enableTurboModuleDebugLogs = false;
 
   /*
    * This feature flag enables logs for Fabric
@@ -55,6 +37,13 @@ public class ReactFeatureFlags {
    * ...$$PropsSetter} class will be used instead.
    */
   public static boolean useViewManagerDelegates = false;
+
+  /**
+   * Should this application use a {@link com.facebook.react.uimanager.ViewManagerDelegate} (if
+   * provided) to execute the view commands. If {@code false}, then {@code receiveCommand} method
+   * inside view manager will be called instead.
+   */
+  public static boolean useViewManagerDelegatesForCommands = false;
 
   /**
    * Should this application use Catalyst Teardown V2? This is an experiment to use a V2 of the
@@ -72,12 +61,10 @@ public class ReactFeatureFlags {
   public static boolean nullifyCatalystInstanceOnDestroy = false;
 
   /**
-   * Temporary flag that should be removed soon. See FabricUIManager: if this flag is disabled,
-   * mountItems scheduled on the UI thread will *always* be executed synchronously. If this flag is
-   * enabled, users of FabricUIManager may disable immediate execution of scheduled mount items.
-   * TODO T54997838: remove as followup
+   * Temporary flag. See UIImplementation: if this flag is enabled, ViewCommands will be queued and
+   * executed before any other types of UI operations.
    */
-  public static boolean allowDisablingImmediateExecutionOfScheduleMountItems = false;
+  public static boolean allowEarlyViewCommandExecution = false;
 
   /**
    * This react flag enables a custom algorithm for the getChildVisibleRect() method in the classes
@@ -92,7 +79,14 @@ public class ReactFeatureFlags {
   public static boolean clipChildRectsIfOverflowIsHidden = false;
 
   /**
-   * This react flag enables the rendering of <View>s with no fixed size within a <Text> component.
+   * Temporary feature flat to control a fix in the transition to layoutOnlyViews TODO T61185028:
+   * remove this when bug is fixed
    */
-  public static boolean supportInlineViewsWithDynamicSize = true;
+  public static boolean enableTransitionLayoutOnlyViewCleanup = false;
+
+  /** Feature flag to configure eager initialization of Fabric */
+  public static boolean eagerInitializeFabric = false;
+
+  /** Feature flag to configure initialization of Fabric surfaces. */
+  public static boolean enableFabricStartSurfaceWithLayoutMetrics = true;
 }

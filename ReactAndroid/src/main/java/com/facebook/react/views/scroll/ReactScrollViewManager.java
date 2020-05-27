@@ -9,9 +9,12 @@ package com.facebook.react.views.scroll;
 
 import android.graphics.Color;
 import android.util.DisplayMetrics;
+import android.view.View;
 import androidx.annotation.Nullable;
 import androidx.core.view.ViewCompat;
 import com.facebook.react.bridge.ReadableArray;
+import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.RetryableMountingLayerException;
 import com.facebook.react.common.MapBuilder;
 import com.facebook.react.module.annotations.ReactModule;
 import com.facebook.react.uimanager.DisplayMetricsHolder;
@@ -272,8 +275,13 @@ public class ReactScrollViewManager extends ViewGroupManager<ReactScrollView>
   @Override
   public void scrollToEnd(
       ReactScrollView scrollView, ReactScrollViewCommandHelper.ScrollToEndCommandData data) {
+    View child = scrollView.getChildAt(0);
+    if (child == null) {
+      throw new RetryableMountingLayerException("scrollToEnd called on ScrollView without child");
+    }
+
     // ScrollView always has one child - the scrollable area
-    int bottom = scrollView.getChildAt(0).getHeight() + scrollView.getPaddingBottom();
+    int bottom = child.getHeight() + scrollView.getPaddingBottom();
     if (data.mAnimated) {
       scrollView.reactSmoothScrollTo(scrollView.getScrollX(), bottom);
     } else {
@@ -294,6 +302,15 @@ public class ReactScrollViewManager extends ViewGroupManager<ReactScrollView>
     } else {
       view.setVerticalFadingEdgeEnabled(false);
       view.setFadingEdgeLength(0);
+    }
+  }
+
+  @ReactProp(name = "contentOffset")
+  public void setContentOffset(ReactScrollView view, ReadableMap value) {
+    if (value != null) {
+      double x = value.hasKey("x") ? value.getDouble("x") : 0;
+      double y = value.hasKey("y") ? value.getDouble("y") : 0;
+      view.reactScrollTo((int) PixelUtil.toPixelFromDIP(x), (int) PixelUtil.toPixelFromDIP(y));
     }
   }
 
