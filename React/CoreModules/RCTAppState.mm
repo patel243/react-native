@@ -56,9 +56,14 @@ RCT_EXPORT_MODULE()
 
 - (facebook::react::ModuleConstants<JS::NativeAppState::Constants>)getConstants
 {
-  return facebook::react::typedConstants<JS::NativeAppState::Constants>({
-      .initialAppState = RCTCurrentAppState(),
+  __block facebook::react::ModuleConstants<JS::NativeAppState::Constants> constants;
+  RCTUnsafeExecuteOnMainQueueSync(^{
+    constants = facebook::react::typedConstants<JS::NativeAppState::Constants>({
+        .initialAppState = RCTCurrentAppState(),
+    });
   });
+
+  return constants;
 }
 
 #pragma mark - Lifecycle
@@ -92,11 +97,6 @@ RCT_EXPORT_MODULE()
 - (void)stopObserving
 {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
-}
-
-- (void)invalidate
-{
-  [self stopObserving];
 }
 
 #pragma mark - App Notification Methods
